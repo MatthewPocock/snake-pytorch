@@ -12,6 +12,7 @@ MAX_MEMORY = 100_000
 BATCH_SIZE = 1000
 LR = 0.001
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Agent:
 
@@ -23,7 +24,7 @@ class Agent:
         self.epsilon_decay = 0.001
         self.gamma = 0.9  # discount rate
         self.memory = deque(maxlen=MAX_MEMORY)  # popleft()
-        self.model = Linear_QNet(250, 2048, 4)
+        self.model = Linear_QNet()
         if saved_weights:
             self.model.load_state_dict(saved_weights)
         # self.model = self.model.load_state_dict(saved_weights)
@@ -31,15 +32,15 @@ class Agent:
 
     def get_state(self, game):
         head = game.snake[0]
-        point_l = Point(head.x - 1, head.y)
-        point_r = Point(head.x + 1, head.y)
-        point_u = Point(head.x, head.y + 1)
-        point_d = Point(head.x, head.y - 1)
-
-        dir_l = game.direction == 'W'
-        dir_r = game.direction == 'E'
-        dir_u = game.direction == 'N'
-        dir_d = game.direction == 'S'
+        # point_l = Point(head.x - 1, head.y)
+        # point_r = Point(head.x + 1, head.y)
+        # point_u = Point(head.x, head.y + 1)
+        # point_d = Point(head.x, head.y - 1)
+        #
+        # dir_l = game.direction == 'W'
+        # dir_r = game.direction == 'E'
+        # dir_u = game.direction == 'N'
+        # dir_d = game.direction == 'S'
 
         body_array = np.zeros((11, 11), dtype=int)
         for p in game.snake:
@@ -54,26 +55,32 @@ class Agent:
         except IndexError:
             pass
 
-        # food_array = np.zeros((11, 11), dtype=int)
+        food_array = np.zeros((11, 11), dtype=int)
+        try:
+            food_array[game.food.x, game.food.y] = 1
+        except IndexError:
+            pass
+        #
+        # state = [
+        #     # check danger
+        #     game.check_collision(point_u),
+        #     game.check_collision(point_r),
+        #     game.check_collision(point_d),
+        #     game.check_collision(point_l),
+        #
+        #     # Food location
+        #     game.food.x < head.x,  # food left
+        #     game.food.x > head.x,  # food right
+        #     game.food.y < head.y,  # food up
+        #     game.food.y > head.y  # food down
+        # ]
 
-        state = [
-            # check danger
-            game.check_collision(point_u),
-            game.check_collision(point_r),
-            game.check_collision(point_d),
-            game.check_collision(point_l),
-
-            # Food location
-            game.food.x < head.x,  # food left
-            game.food.x > head.x,  # food right
-            game.food.y < head.y,  # food up
-            game.food.y > head.y  # food down
-        ]
-        danger_array = np.array(state, dtype=int)
         flat_head_array = head_array.ravel()
         flat_body_array = body_array.ravel()
+        flat_food_array = food_array.ravel()
 
-        return np.concatenate((danger_array, flat_head_array, flat_body_array))
+        return np.concatenate((flat_head_array, flat_body_array, flat_food_array))
+        # return np.array(state, dtype=int)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))  # popleft if MAX_MEMORY is reached
@@ -104,7 +111,7 @@ class Agent:
             final_move[move] = 1
         else:
             # print('using NN to generate move...')
-            state0 = torch.tensor(state, dtype=torch.float)
+            state0 = torch.tensor(state, dtype=torch.float, device=device)
             prediction = self.model(state0)
             move = torch.argmax(prediction).item()
             final_move[move] = 1
@@ -124,7 +131,7 @@ def train():
     except FileNotFoundError:
         print('no stored model found, will create new model')
         agent = Agent()
-    game = Board(display=False)
+    game = Board(display=True)
     while True:
         # get old state
         state_old = agent.get_state(game)
