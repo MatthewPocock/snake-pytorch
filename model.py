@@ -7,7 +7,8 @@ import os
 # Check if CUDA is available and set the device accordingly
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class CNN_QNet(nn.Module):
+
+class CNN_Actor(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(4, 16, kernel_size=3, stride=1, padding=1)
@@ -24,24 +25,39 @@ class CNN_QNet(nn.Module):
         x = x.view(-1, 32 * 2 * 2)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
+        x = F.softmax(self.fc3(x), dim=1)
+        return x
+
+
+class CNN_Critic(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(4, 16, kernel_size=3, stride=1, padding=1)
+        self.pool1 = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+        self.pool2 = nn.MaxPool2d(2, 2)
+        self.fc1 = nn.Linear(32 * 2 * 2, 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, 1)
+
+    def forward(self, x):
+        x = self.pool1(F.relu(self.conv1(x)))
+        x = self.pool2(F.relu(self.conv2(x)))
+        x = x.view(-1, 32 * 2 * 2)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
 
-    def save(self, file_name='model.pth'):
-        model_folder_path = './model'
-        if not os.path.exists(model_folder_path):
-            os.makedirs(model_folder_path)
 
-        file_name = os.path.join(model_folder_path, file_name)
-        torch.save(self.state_dict(), file_name)
-
-
-class QTrainer:
-    def __init__(self, model, lr, gamma):
+class A2CTrainer:
+    def __init__(self, actor, critic, lr, gamma):
         self.lr = lr
         self.gamma = gamma
-        self.model = model.to(device)
-        self.optimizer = optim.Adam(model.parameters(), lr=self.lr)
+        self.actor = actor.to(device)
+        self.critic = critic.to(device)
+        self.optimizer_actor = optim.Adam(self.actor.parameters(), lr=self.lr)
+        self.optimizer_critic = optim.Adam(self.critic.parameters(), lr=self.lr)
         self.criterion = nn.MSELoss()
 
     def train_step(self, state, action, reward, next_state, done):
@@ -49,34 +65,29 @@ class QTrainer:
         next_state = torch.tensor(next_state, dtype=torch.float, device=device)
         action = torch.tensor(action, dtype=torch.long, device=device)
         reward = torch.tensor(reward, dtype=torch.float, device=device)
-        # (n, x)
+        done = torch.tensor(done, dtype=torch.bool, device=device)
 
-        if len(state.shape) == 1:
-            # (1, x)
-            state = torch.unsqueeze(state, 0)
-            next_state = torch.unsqueeze(next_state, 0)
-            action = torch.unsqueeze(action, 0)
-            reward = torch.unsqueeze(reward, 0)
-            done = (done,)
-        elif done is True or done is False:
-            state = torch.unsqueeze(state, 0)
-            next_state = torch.unsqueeze(next_state, 0)
-            action = torch.unsqueeze(action, 0)
-            reward = torch.unsqueeze(reward, 0)
-            done = (done,)
+        # Get the action probabilities from the policy network
+        action_probs = self.actor(state)
+        value = self.critic(state)
 
-        # 1: predicted Q values with current state
-        pred = self.model(state)
-        target = pred.clone()
-        for idx in range(len(done)):
-            Q_new = reward[idx]
-            if not done[idx]:
-                Q_new = reward[idx] + self.gamma * torch.max(self.model(next_state[idx]))
+        # Compute the value loss
+        target_value = reward + self.gamma * self.critic(next_state) * (~done).float()
+        value_loss = self.criterion(target_value, value)
 
-            target[idx][torch.argmax(action[idx]).item()] = Q_new
+        # Compute the policy loss
+        chosen_action_index = action.argmax(dim=1, keepdim=True)
+        log_action_probs = torch.log(action_probs.gather(1, chosen_action_index))
+        advantage = (target_value - value).detach()
+        policy_loss = -(log_action_probs * advantage).mean()
 
-        self.optimizer.zero_grad()
-        loss = self.criterion(target, pred)
-        loss.backward()
+        # Update the critic network
+        self.optimizer_critic.zero_grad()
+        value_loss.backward()
+        self.optimizer_critic.step()
 
-        self.optimizer.step()
+        # Update the actor network
+        self.optimizer_actor.zero_grad()
+        policy_loss.backward()
+        self.optimizer_actor.step()
+

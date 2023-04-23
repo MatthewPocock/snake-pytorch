@@ -3,7 +3,7 @@ import random
 import numpy as np
 from collections import deque
 from board import Board, Point
-from model import CNN_QNet, QTrainer
+from model import CNN_Actor, CNN_Critic, A2CTrainer
 from helper import plot
 import time
 import math
@@ -24,11 +24,12 @@ class Agent:
         self.epsilon_decay = 0.001
         self.gamma = 0.9  # discount rate
         self.memory = deque(maxlen=MAX_MEMORY)  # popleft()
-        self.model = CNN_QNet()
+        self.model_actor = CNN_Actor()
+        self.model_critic = CNN_Critic()
         if saved_weights:
-            self.model.load_state_dict(saved_weights)
+            self.model_actor.load_state_dict(saved_weights)
         # self.model = self.model.load_state_dict(saved_weights)
-        self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
+        self.trainer = A2CTrainer(self.model_actor, self.model_critic, lr=LR, gamma=self.gamma)
 
     def get_state(self, game):
         head = game.snake[0]
@@ -113,26 +114,23 @@ class Agent:
         #    self.trainer.train_step(state, action, reward, next_state, done)
 
     def train_short_memory(self, state, action, reward, next_state, done):
+        state = np.expand_dims(state, 0)
+        action = np.expand_dims(action, 0)
+        reward = np.expand_dims(reward, 0)
+        next_state = np.expand_dims(next_state, 0)
+        done = (done,)
         self.trainer.train_step(state, action, reward, next_state, done)
 
     def get_action(self, state, board):
         # random moves: tradeoff exploration / exploitation
         self.epsilon = self.epsilon_min + (self.epsilon_max - self.epsilon_min) * math.exp(-self.epsilon_decay * self.n_games)
         final_move = [0, 0, 0, 0]
-        if random.uniform(0, 1) < self.epsilon:
-            # possible_moves = board.get_moves()
-            move = random.randint(0, 3)
-            while board.is_opposite(move):
-                move = random.randint(0, 3)
-            final_move[move] = 1
-        else:
-            # print('using NN to generate move...')
-            state0 = torch.tensor(state, dtype=torch.float, device=device)
-            prediction = self.model(state0)
-            # probabilities = torch.softmax(prediction, dim=0)
-            # move = torch.multinomial(probabilities, 1).item()
-            move = torch.argmax(prediction).item()
-            final_move[move] = 1
+        state0 = torch.tensor(state, dtype=torch.float, device=device)
+        prediction = self.model_actor(state0)
+        probabilities = torch.softmax(prediction, dim=0)
+        move = torch.multinomial(probabilities, 1).item()
+        # move = torch.argmax(prediction).item()
+        final_move[move] = 1
 
         return final_move
 
@@ -143,7 +141,7 @@ def train():
     total_score = 0
     record = 0
     try:
-        saved_weights = torch.load('model/model.pth')
+        saved_weights = torch.load('model/model.pth', map_location=torch.device('cpu'))
         print('loading saved model')
         agent = Agent(saved_weights=saved_weights)
     except FileNotFoundError:
@@ -187,7 +185,8 @@ def train():
                 record = score
                 # agent.model.save()
                 print('storing model...')
-                torch.save(agent.model.state_dict(), f'model/model.pth')
+                torch.save(agent.model_actor.state_dict(), f'model/model_actor.pth')
+                torch.save(agent.model_critic.state_dict(), f'model/critic_actor.pth')
 
             print('Game', agent.n_games, 'Score', score, 'Record:', record)
 
@@ -196,7 +195,6 @@ def train():
             mean_score = total_score / agent.n_games
             plot_mean_scores.append(mean_score)
             plot(plot_scores, plot_mean_scores)
-            # time.sleep(.5)
 
 
 if __name__ == '__main__':
