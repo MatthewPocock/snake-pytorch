@@ -3,7 +3,7 @@ import random
 import numpy as np
 from collections import deque
 from board import Board, Point
-from model import Linear_QNet, QTrainer
+from model import CNN_QNet, QTrainer
 from helper import plot
 import time
 import math
@@ -24,7 +24,7 @@ class Agent:
         self.epsilon_decay = 0.001
         self.gamma = 0.9  # discount rate
         self.memory = deque(maxlen=MAX_MEMORY)  # popleft()
-        self.model = Linear_QNet()
+        self.model = CNN_QNet()
         if saved_weights:
             self.model.load_state_dict(saved_weights)
         # self.model = self.model.load_state_dict(saved_weights)
@@ -32,15 +32,15 @@ class Agent:
 
     def get_state(self, game):
         head = game.snake[0]
-        # point_l = Point(head.x - 1, head.y)
-        # point_r = Point(head.x + 1, head.y)
-        # point_u = Point(head.x, head.y + 1)
-        # point_d = Point(head.x, head.y - 1)
-        #
-        # dir_l = game.direction == 'W'
-        # dir_r = game.direction == 'E'
-        # dir_u = game.direction == 'N'
-        # dir_d = game.direction == 'S'
+        point_l = Point(head.x - 1, head.y)
+        point_r = Point(head.x + 1, head.y)
+        point_u = Point(head.x, head.y + 1)
+        point_d = Point(head.x, head.y - 1)
+
+        dir_l = game.direction == 'W'
+        dir_r = game.direction == 'E'
+        dir_u = game.direction == 'N'
+        dir_d = game.direction == 'S'
 
         body_array = np.zeros((11, 11), dtype=int)
         for p in game.snake:
@@ -55,32 +55,48 @@ class Agent:
         except IndexError:
             pass
 
+        neck_array = np.zeros((11, 11), dtype=int)
+        try:
+            neck_array[game.snake[1].x, game.snake[1].y] = 1
+        except IndexError:
+            pass
+
         food_array = np.zeros((11, 11), dtype=int)
         try:
             food_array[game.food.x, game.food.y] = 1
         except IndexError:
             pass
-        #
-        # state = [
-        #     # check danger
-        #     game.check_collision(point_u),
-        #     game.check_collision(point_r),
-        #     game.check_collision(point_d),
-        #     game.check_collision(point_l),
-        #
-        #     # Food location
-        #     game.food.x < head.x,  # food left
-        #     game.food.x > head.x,  # food right
-        #     game.food.y < head.y,  # food up
-        #     game.food.y > head.y  # food down
-        # ]
 
-        flat_head_array = head_array.ravel()
-        flat_body_array = body_array.ravel()
-        flat_food_array = food_array.ravel()
+        collisions_li = []
+        for x in range(-3, 4):
+            for y in range(-3, 4):
+                if not (x == 0 and y == 0):
+                    p = Point(head.x + x, head.y + y)
+                    collisions_li.append(game.check_collision(p))
 
-        return np.concatenate((flat_head_array, flat_body_array, flat_food_array))
+
+        state = [
+            # # check danger
+            # game.check_collision(point_u),
+            # game.check_collision(point_r),
+            # game.check_collision(point_d),
+            # game.check_collision(point_l),
+
+            # Food location
+            game.food.x < head.x,  # food left
+            game.food.x > head.x,  # food right
+            game.food.y < head.y,  # food up
+            game.food.y > head.y  # food down
+        ]
+
+        # flat_head_array = head_array.ravel()
+        # flat_body_array = body_array.ravel()
+        # flat_food_array = food_array.ravel()
+        # flat_food_array = np.array(state, dtype=int)
+        # return np.concatenate((flat_head_array, flat_body_array, flat_food_array))
         # return np.array(state, dtype=int)
+        # return np.concatenate((collisions_li, state))
+        return np.stack((head_array, neck_array, body_array, food_array), axis=0)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))  # popleft if MAX_MEMORY is reached
@@ -113,6 +129,8 @@ class Agent:
             # print('using NN to generate move...')
             state0 = torch.tensor(state, dtype=torch.float, device=device)
             prediction = self.model(state0)
+            # probabilities = torch.softmax(prediction, dim=0)
+            # move = torch.multinomial(probabilities, 1).item()
             move = torch.argmax(prediction).item()
             final_move[move] = 1
 
@@ -131,7 +149,7 @@ def train():
     except FileNotFoundError:
         print('no stored model found, will create new model')
         agent = Agent()
-    game = Board(display=True)
+    game = Board(display=False)
     while True:
         # get old state
         state_old = agent.get_state(game)

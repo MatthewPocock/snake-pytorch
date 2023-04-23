@@ -160,5 +160,5 @@ class BoardDisplay:
 
         self.display.blit(text, [0, 0])
         pygame.display.flip()
-        # time.sleep(.1)
+        time.sleep(.1)
 
